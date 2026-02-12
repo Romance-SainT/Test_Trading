@@ -1,3 +1,29 @@
+# [app.py 맨 윗부분에 이 코드를 추가하세요]
+import streamlit as st
+
+# ... (기존 import들) ...
+
+# ==========================================
+# [보안] 비밀번호 잠금 기능 (Simple Login)
+# ==========================================
+# 1. 비밀번호 설정 (원하는 걸로 바꾸세요)
+MY_PASSWORD = "1110"
+
+if 'login_status' not in st.session_state:
+    st.session_state['login_status'] = False
+
+if not st.session_state['login_status']:
+    st.title("🔒 Private Access")
+    input_pw = st.text_input("비밀번호를 입력하세요 (Password)", type="password")
+    
+    if st.button("로그인 (Login)"):
+        if input_pw == MY_PASSWORD:
+            st.session_state['login_status'] = True
+            st.rerun() # 화면 새로고침해서 메인화면 보여줌
+        else:
+            st.error("비밀번호가 틀렸습니다!")
+    
+    st.stop() # 비밀번호 틀리면 여기서 코드 실행을 멈춤 (아래 내용 안 보여줌)
 import streamlit as st  # 웹 앱 생성을 위한 라이브러리
 import requests         # API 통신(업비트, 바이낸스, 환율 서버)을 위한 라이브러리
 import time             # 1초 대기 등 시간 제어를 위해 사용
