@@ -9,17 +9,16 @@ from datetime import datetime
 # [1] 페이지 설정
 # ==========================================
 st.set_page_config(
-    page_title="Crypto Master Sim (10x Leverage)",
+    page_title="Crypto Master Sim (Live)",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
 # ==========================================
-# [2] 환경 설정 (수수료 & 레버리지)
+# [2] 수수료 설정
 # ==========================================
 FEE_UPBIT = 0.0005  # 업비트 0.05%
-FEE_FOREIGN = 0.001 # 바이낸스 US 0.1% (시장가 기준)
-LEVERAGE = 10       # ⚡ 레버리지 10배 설정
+FEE_FOREIGN = 0.001 # 바이낸스 US 0.1%
 
 # ==========================================
 # [3] 보안 설정
@@ -99,7 +98,6 @@ def get_data(symbol):
         except:
             rate = 1450.0
 
-        # 업비트
         u_url = f"https://api.upbit.com/v1/ticker?markets=KRW-{symbol}"
         u_res = requests.get(u_url, headers=headers, timeout=3)
         if u_res.status_code != 200: return {"error": f"Upbit {u_res.status_code}"}
@@ -108,7 +106,6 @@ def get_data(symbol):
         u_ob_url = f"https://api.upbit.com/v1/orderbook?markets=KRW-{symbol}"
         u_ob = requests.get(u_ob_url, headers=headers, timeout=3).json()[0]['orderbook_units'][:5]
         
-        # 바이낸스 US
         b_ticker_url = f"https://api.binance.us/api/v3/ticker/price?symbol={symbol}USDT"
         b_res = requests.get(b_ticker_url, headers=headers, timeout=3)
         if b_res.status_code != 200: return {"error": f"Binance US {b_res.status_code}"}
@@ -161,8 +158,12 @@ with tab1:
     monitor_placeholder = st.empty()
 
 with tab2:
+    # [NEW] 여기에 실시간 시세를 보여줄 공간 확보
+    st.markdown("### ⚡ 실시간 마켓 데이터 (Live Market)")
+    sim_ticker_placeholder = st.empty() 
+    
     st.markdown("### 💼 투자 현황 (Portfolio Status)")
-    st.markdown(f"<div class='fee-info'>※ 레버리지: {LEVERAGE}배 | 수수료: 업비트 {FEE_UPBIT*100}% | 바이낸스 {FEE_FOREIGN*100}%</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='fee-info'>※ 레버리지: 10배 | 수수료: 업비트 {FEE_UPBIT*100}% | 바이낸스 {FEE_FOREIGN*100}%</div>", unsafe_allow_html=True)
     
     portfolio_placeholder = st.empty() 
     st.divider()
@@ -174,28 +175,20 @@ with tab2:
         if st.session_state['position'] is None:
             invest_amount = st.number_input("투자할 총 금액 (KRW)", min_value=100000, max_value=int(st.session_state['balance']), value=1000000, step=100000, key="invest_input")
             
-            # [10배 레버리지 계산]
-            # 예: 100만원 투자, 레버리지 10배
-            # 업비트 할당금액 = 100만원 * (10 / 11) ≈ 90.9만원
-            # 바이낸스 증거금 = 100만원 * (1 / 11) ≈ 9.1만원
-            # -> 바이낸스 포지션 크기 = 9.1만원 * 10배 = 91만원 (업비트와 거의 1:1)
-            upbit_alloc = invest_amount * (LEVERAGE / (LEVERAGE + 1))
-            binance_margin = invest_amount * (1 / (LEVERAGE + 1))
+            # 10배 레버리지 비율 (업비트 91% : 바이낸스 9%)
+            upbit_alloc = invest_amount * (10 / 11)
+            binance_margin = invest_amount * (1 / 11)
             
-            if st.button(f"🚀 {LEVERAGE}배 풀시드 진입 (업비트 {int(upbit_alloc/invest_amount*100)}% + 숏 증거금 {100-int(upbit_alloc/invest_amount*100)}%)", key="btn_buy"):
+            if st.button(f"🚀 10배 풀시드 진입 (업비트 {int(upbit_alloc/invest_amount*100)}% + 숏 증거금 {100-int(upbit_alloc/invest_amount*100)}%)", key="btn_buy"):
                 data = get_data(sym)
                 if data and 'error' not in data:
                     u_price = data['u_p']
                     b_price = data['b_p']
                     rate = data['rate']
                     
-                    # 업비트 매수 수량 (최대치)
                     btc_qty = upbit_alloc / u_price
-                    
-                    # 수수료 계산 (포지션 전체 크기 기준)
-                    # 바이낸스 수수료는 '증거금'이 아니라 '레버리지 태운 총 금액'에 대해 나옴
                     entry_fee_u = upbit_alloc * FEE_UPBIT
-                    entry_fee_b = (b_price * btc_qty * rate) * FEE_FOREIGN
+                    entry_fee_b = b_price * btc_qty * rate * FEE_FOREIGN
                     
                     st.session_state['position'] = {
                         'symbol': sym,
@@ -207,9 +200,7 @@ with tab2:
                         'rate_entry': rate,
                         'entry_kimp': data['premium'],
                         'entry_fee_u': entry_fee_u,
-                        'entry_fee_b': entry_fee_b,
-                        'upbit_alloc': upbit_alloc, # 업비트에 들어간 돈
-                        'binance_margin': binance_margin # 바이낸스 증거금
+                        'entry_fee_b': entry_fee_b
                     }
                     st.session_state['balance'] -= invest_amount
                     st.rerun()
@@ -228,21 +219,13 @@ with tab2:
                     curr_b_price = data['b_p']
                     curr_rate = data['rate']
                     
-                    # 1. 차익 계산 (Gross PNL)
-                    # 업비트: (현재가 - 진입가) * 수량
                     gross_u = (curr_u_price - pos['u_entry']) * pos['qty']
-                    # 바이낸스: (진입가 - 현재가) * 수량 * 환율 (숏)
                     gross_b = (pos['b_entry'] - curr_b_price) * pos['qty'] * curr_rate
                     
-                    # 2. 종료 수수료
                     exit_fee_u = curr_u_price * pos['qty'] * FEE_UPBIT
                     exit_fee_b = curr_b_price * pos['qty'] * curr_rate * FEE_FOREIGN
                     
-                    total_fee_u = pos['entry_fee_u'] + exit_fee_u
-                    total_fee_b = pos['entry_fee_b'] + exit_fee_b
-                    total_fee_all = total_fee_u + total_fee_b
-                    
-                    # 3. 최종 순수익
+                    total_fee_all = pos['entry_fee_u'] + pos['entry_fee_b'] + exit_fee_u + exit_fee_b
                     net_pnl = (gross_u + gross_b) - total_fee_all
                     roi = (net_pnl / pos['invest_krw']) * 100
                     
@@ -251,7 +234,6 @@ with tab2:
                     save_trade({
                         "Time": datetime.now().strftime("%m-%d %H:%M"),
                         "Coin": pos['symbol'],
-                        "Lev": f"x{LEVERAGE}",
                         "Invest": int(pos['invest_krw']),
                         "Upbit PNL": int(gross_u),
                         "Binance PNL": int(gross_b),
@@ -282,8 +264,13 @@ while True:
     d = get_data(sym)
     
     if d and 'error' not in d:
+        
+        # 1. 김프 색상 및 텍스트 설정 (공통 사용)
+        p_color = "red" if d['premium'] >= 0 else "blue"
+        p_delta_color = "normal" if d['premium'] >= 0 else "inverse"
+
+        # --- [Tab 1] 실시간 시세 (Monitor) ---
         with monitor_placeholder.container():
-            p_color = "#ff6b6b" if d['premium'] >= 0 else "#54a0ff"
             st.markdown(f"""
             <div style='text-align:center; color:#bdc3c7; font-size:1.0rem; margin-bottom:15px;' class='notranslate'>
                 USD/KRW: <b>{d['rate']:,.1f}</b> | <span style='color:{p_color}; font-weight:bold;'>Kimchi: {d['premium']:+.2f}%</span>
@@ -293,7 +280,7 @@ while True:
             u_html = f"<div class='header-upbit'>Upbit</div><div style='color:#5DADE2; font-size:0.7rem; text-align:center;'>▼ Sell</div>"
             for it in d['u_asks']:
                 u_html += f"<div class='ob-row'><span class='price-col ask-text'>{it['ask_price']:,.0f}</span><span class='sep-col'>|</span><span class='qty-col ask-text'>{it['ask_size']:.3f}</span></div>"
-            u_html += f"<div class='current-box'><div class='curr-main'>₩{d['u_p']:,.0f}</div><div class='curr-sub' style='visibility:hidden'>(Spacer)</div></div>"
+            u_html += f"<div class='current-box'><div class='curr-main'>₩{d['u_p']:,.0f}</div></div>"
             u_html += f"<div style='color:#EC7063; font-size:0.7rem; text-align:center;'>▲ Buy</div>"
             for it in d['u_bids']:
                 u_html += f"<div class='ob-row'><span class='price-col bid-text'>{it['bid_price']:,.0f}</span><span class='sep-col'>|</span><span class='qty-col bid-text'>{it['bid_size']:.3f}</span></div>"
@@ -301,7 +288,7 @@ while True:
             b_html = f"<div class='header-binance'>Binance(US)</div><div style='color:#5DADE2; font-size:0.7rem; text-align:center;'>▼ Sell</div>"
             for it in d['b_asks']:
                 b_html += f"<div class='ob-row'><span class='price-col ask-text'>{float(it[0]):,.2f}</span><span class='sep-col'>|</span><span class='qty-col ask-text'>{float(it[1]):.3f}</span></div>"
-            b_html += f"<div class='current-box'><div class='curr-main'>${d['b_p']:,.2f}</div><div class='curr-sub'>(≈₩{d['b_p']*d['rate']:,.0f})</div></div>"
+            b_html += f"<div class='current-box'><div class='curr-main'>${d['b_p']:,.2f}</div></div>"
             b_html += f"<div style='color:#EC7063; font-size:0.7rem; text-align:center;'>▲ Buy</div>"
             for it in d['b_bids']:
                 b_html += f"<div class='ob-row'><span class='price-col bid-text'>{float(it[0]):,.2f}</span><span class='sep-col'>|</span><span class='qty-col bid-text'>{float(it[1]):.3f}</span></div>"
@@ -313,6 +300,16 @@ while True:
                 <div class='ob-container' style='flex:1;'>{b_html}</div>
             </div>
             """, unsafe_allow_html=True)
+
+        # --- [Tab 2] 모의 투자 시세 업데이트 (NEW) ---
+        with sim_ticker_placeholder.container():
+            # 깔끔한 4컬럼 시세판
+            t1, t2, t3, t4 = st.columns(4)
+            t1.metric("업비트 (KRW)", f"{d['u_p']:,.0f} 원")
+            t2.metric("바이낸스 (USD)", f"${d['b_p']:,.2f}")
+            t3.metric("김치 프리미엄", f"{d['premium']:.2f}%", delta_color=p_delta_color)
+            t4.metric("환율 (USD/KRW)", f"{d['rate']:,.1f} 원")
+            st.divider()
 
         with portfolio_placeholder.container():
             c1, c2 = st.columns(2)
@@ -326,35 +323,33 @@ while True:
                 curr_b_price = d['b_p']
                 curr_rate = d['rate']
                 
-                # 차익 (Gross)
+                # PNL 계산
                 gross_u = (curr_u_price - pos['u_entry']) * pos['qty']
                 gross_b = (pos['b_entry'] - curr_b_price) * pos['qty'] * curr_rate
                 
-                # ROI (투자금 대비)
+                # 수수료
+                est_exit_fee_u = curr_u_price * pos['qty'] * FEE_UPBIT
+                est_exit_fee_b = curr_b_price * pos['qty'] * curr_rate * FEE_FOREIGN
+                total_fee = pos['entry_fee_u'] + pos['entry_fee_b'] + est_exit_fee_u + est_exit_fee_b
+                
+                # 순수익
+                net_pnl = (gross_u + gross_b) - total_fee
+                net_roi = (net_pnl / pos['invest_krw']) * 100
+                
+                # ROI 개별 표시
                 roi_u = (gross_u / pos['invest_krw']) * 100
                 roi_b = (gross_b / pos['invest_krw']) * 100
                 
-                # 실시간 예상 수수료
-                est_exit_fee_u = curr_u_price * pos['qty'] * FEE_UPBIT
-                est_exit_fee_b = curr_b_price * pos['qty'] * curr_rate * FEE_FOREIGN
-                total_fee_u = pos['entry_fee_u'] + est_exit_fee_u
-                total_fee_b = pos['entry_fee_b'] + est_exit_fee_b
+                st.markdown(f"**현재 포지션:** {pos['symbol']}")
                 
-                # 순수익
-                net_pnl = (gross_u + gross_b) - (total_fee_u + total_fee_b)
-                net_roi = (net_pnl / pos['invest_krw']) * 100
-                
-                st.markdown(f"**현재 코인:** {pos['symbol']} (Lev: x{LEVERAGE})")
-                
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("업비트 수익", f"{int(gross_u):,} 원", f"{roi_u:.2f}%")
-                c2.metric("업비트 수수료", f"-{int(total_fee_u):,} 원")
-                c3.metric("바이낸스 수익", f"{int(gross_b):,} 원", f"{roi_b:.2f}%")
-                c4.metric("바이낸스 수수료", f"-{int(total_fee_b):,} 원")
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("업비트 수익", f"{int(gross_u):,} 원", f"{roi_u:.2f}%")
+                m2.metric("업비트 수수료", f"-{int(pos['entry_fee_u'] + est_exit_fee_u):,} 원")
+                m3.metric("바이낸스 수익", f"{int(gross_b):,} 원", f"{roi_b:.2f}%")
+                m4.metric("바이낸스 수수료", f"-{int(pos['entry_fee_b'] + est_exit_fee_b):,} 원")
                 
                 st.divider()
                 st.metric("최종 순수익 (Net Profit)", f"{int(net_pnl):,} 원", f"{net_roi:.2f}%")
-                
                 st.info(f"진입 김프: {pos['entry_kimp']:.2f}%  👉  현재 김프: {d['premium']:.2f}%")
     
     elif d and 'error' in d:
