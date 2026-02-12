@@ -9,7 +9,7 @@ from datetime import datetime
 # [1] 페이지 설정
 # ==========================================
 st.set_page_config(
-    page_title="Crypto Master Sim (Live)",
+    page_title="Crypto Master Sim (Final Fix)",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -128,7 +128,7 @@ def get_data(symbol):
         return {"error": str(e)}
 
 # ==========================================
-# [7] 파일 입출력
+# [7] 파일 입출력 (에러 수정됨!)
 # ==========================================
 def save_trade(trade_data):
     df = pd.DataFrame([trade_data])
@@ -139,7 +139,12 @@ def save_trade(trade_data):
 
 def load_trades():
     if os.path.exists(HISTORY_FILE):
-        return pd.read_csv(HISTORY_FILE)
+        try:
+            return pd.read_csv(HISTORY_FILE)
+        except Exception:
+            # [수정] 파일이 깨져있거나 형식이 다르면 삭제하고 새로 시작
+            os.remove(HISTORY_FILE)
+            return pd.DataFrame()
     return pd.DataFrame()
 
 # ==========================================
@@ -158,9 +163,8 @@ with tab1:
     monitor_placeholder = st.empty()
 
 with tab2:
-    # [NEW] 여기에 실시간 시세를 보여줄 공간 확보
     st.markdown("### ⚡ 실시간 마켓 데이터 (Live Market)")
-    sim_ticker_placeholder = st.empty() 
+    sim_ticker_placeholder = st.empty()
     
     st.markdown("### 💼 투자 현황 (Portfolio Status)")
     st.markdown(f"<div class='fee-info'>※ 레버리지: 10배 | 수수료: 업비트 {FEE_UPBIT*100}% | 바이낸스 {FEE_FOREIGN*100}%</div>", unsafe_allow_html=True)
@@ -254,7 +258,7 @@ with tab2:
     if not history_df.empty:
         st.dataframe(history_df.sort_index(ascending=False), use_container_width=True)
     else:
-        st.info("거래 기록 없음")
+        st.info("거래 기록 없음 (기존 기록이 깨져서 초기화되었습니다)")
 
 
 # ==========================================
@@ -264,12 +268,9 @@ while True:
     d = get_data(sym)
     
     if d and 'error' not in d:
-        
-        # 1. 김프 색상 및 텍스트 설정 (공통 사용)
         p_color = "red" if d['premium'] >= 0 else "blue"
         p_delta_color = "normal" if d['premium'] >= 0 else "inverse"
 
-        # --- [Tab 1] 실시간 시세 (Monitor) ---
         with monitor_placeholder.container():
             st.markdown(f"""
             <div style='text-align:center; color:#bdc3c7; font-size:1.0rem; margin-bottom:15px;' class='notranslate'>
@@ -301,9 +302,7 @@ while True:
             </div>
             """, unsafe_allow_html=True)
 
-        # --- [Tab 2] 모의 투자 시세 업데이트 (NEW) ---
         with sim_ticker_placeholder.container():
-            # 깔끔한 4컬럼 시세판
             t1, t2, t3, t4 = st.columns(4)
             t1.metric("업비트 (KRW)", f"{d['u_p']:,.0f} 원")
             t2.metric("바이낸스 (USD)", f"${d['b_p']:,.2f}")
@@ -323,22 +322,18 @@ while True:
                 curr_b_price = d['b_p']
                 curr_rate = d['rate']
                 
-                # PNL 계산
                 gross_u = (curr_u_price - pos['u_entry']) * pos['qty']
                 gross_b = (pos['b_entry'] - curr_b_price) * pos['qty'] * curr_rate
                 
-                # 수수료
+                roi_u = (gross_u / pos['invest_krw']) * 100
+                roi_b = (gross_b / pos['invest_krw']) * 100
+                
                 est_exit_fee_u = curr_u_price * pos['qty'] * FEE_UPBIT
                 est_exit_fee_b = curr_b_price * pos['qty'] * curr_rate * FEE_FOREIGN
                 total_fee = pos['entry_fee_u'] + pos['entry_fee_b'] + est_exit_fee_u + est_exit_fee_b
                 
-                # 순수익
                 net_pnl = (gross_u + gross_b) - total_fee
                 net_roi = (net_pnl / pos['invest_krw']) * 100
-                
-                # ROI 개별 표시
-                roi_u = (gross_u / pos['invest_krw']) * 100
-                roi_b = (gross_b / pos['invest_krw']) * 100
                 
                 st.markdown(f"**현재 포지션:** {pos['symbol']}")
                 
