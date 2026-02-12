@@ -9,16 +9,17 @@ from datetime import datetime
 # [1] 페이지 설정
 # ==========================================
 st.set_page_config(
-    page_title="Crypto Master Sim (Detailed Fees)",
+    page_title="Crypto Master Sim (10x Leverage)",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
 # ==========================================
-# [2] 수수료 설정 (업비트 0.05%, 바이낸스US 0.1%)
+# [2] 환경 설정 (수수료 & 레버리지)
 # ==========================================
-FEE_UPBIT = 0.0005 
-FEE_FOREIGN = 0.001 
+FEE_UPBIT = 0.0005  # 업비트 0.05%
+FEE_FOREIGN = 0.001 # 바이낸스 US 0.1% (시장가 기준)
+LEVERAGE = 10       # ⚡ 레버리지 10배 설정
 
 # ==========================================
 # [3] 보안 설정
@@ -161,7 +162,7 @@ with tab1:
 
 with tab2:
     st.markdown("### 💼 투자 현황 (Portfolio Status)")
-    st.markdown(f"<div class='fee-info'>※ 수수료: 업비트 {FEE_UPBIT*100}% | 바이낸스(US) {FEE_FOREIGN*100}% (왕복 자동 차감)</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='fee-info'>※ 레버리지: {LEVERAGE}배 | 수수료: 업비트 {FEE_UPBIT*100}% | 바이낸스 {FEE_FOREIGN*100}%</div>", unsafe_allow_html=True)
     
     portfolio_placeholder = st.empty() 
     st.divider()
@@ -171,20 +172,30 @@ with tab2:
     with sim_controls:
         # A. 진입 (BUY)
         if st.session_state['position'] is None:
-            invest_amount = st.number_input("투자할 금액 (원화 KRW)", min_value=100000, max_value=int(st.session_state['balance']), value=1000000, step=100000, key="invest_input")
+            invest_amount = st.number_input("투자할 총 금액 (KRW)", min_value=100000, max_value=int(st.session_state['balance']), value=1000000, step=100000, key="invest_input")
             
-            if st.button("🚀 포지션 진입 (업비트 매수 + 바이낸스 숏)", key="btn_buy"):
+            # [10배 레버리지 계산]
+            # 예: 100만원 투자, 레버리지 10배
+            # 업비트 할당금액 = 100만원 * (10 / 11) ≈ 90.9만원
+            # 바이낸스 증거금 = 100만원 * (1 / 11) ≈ 9.1만원
+            # -> 바이낸스 포지션 크기 = 9.1만원 * 10배 = 91만원 (업비트와 거의 1:1)
+            upbit_alloc = invest_amount * (LEVERAGE / (LEVERAGE + 1))
+            binance_margin = invest_amount * (1 / (LEVERAGE + 1))
+            
+            if st.button(f"🚀 {LEVERAGE}배 풀시드 진입 (업비트 {int(upbit_alloc/invest_amount*100)}% + 숏 증거금 {100-int(upbit_alloc/invest_amount*100)}%)", key="btn_buy"):
                 data = get_data(sym)
                 if data and 'error' not in data:
                     u_price = data['u_p']
                     b_price = data['b_p']
                     rate = data['rate']
                     
-                    btc_qty = invest_amount / u_price
+                    # 업비트 매수 수량 (최대치)
+                    btc_qty = upbit_alloc / u_price
                     
-                    # [진입 수수료 분리 저장]
-                    entry_fee_u = invest_amount * FEE_UPBIT
-                    entry_fee_b = b_price * btc_qty * rate * FEE_FOREIGN
+                    # 수수료 계산 (포지션 전체 크기 기준)
+                    # 바이낸스 수수료는 '증거금'이 아니라 '레버리지 태운 총 금액'에 대해 나옴
+                    entry_fee_u = upbit_alloc * FEE_UPBIT
+                    entry_fee_b = (b_price * btc_qty * rate) * FEE_FOREIGN
                     
                     st.session_state['position'] = {
                         'symbol': sym,
@@ -195,8 +206,10 @@ with tab2:
                         'qty': btc_qty,
                         'rate_entry': rate,
                         'entry_kimp': data['premium'],
-                        'entry_fee_u': entry_fee_u, # 업비트 진입수수료
-                        'entry_fee_b': entry_fee_b  # 바이낸스 진입수수료
+                        'entry_fee_u': entry_fee_u,
+                        'entry_fee_b': entry_fee_b,
+                        'upbit_alloc': upbit_alloc, # 업비트에 들어간 돈
+                        'binance_margin': binance_margin # 바이낸스 증거금
                     }
                     st.session_state['balance'] -= invest_amount
                     st.rerun()
@@ -215,20 +228,21 @@ with tab2:
                     curr_b_price = data['b_p']
                     curr_rate = data['rate']
                     
-                    # 1. 차익 (Gross PNL)
+                    # 1. 차익 계산 (Gross PNL)
+                    # 업비트: (현재가 - 진입가) * 수량
                     gross_u = (curr_u_price - pos['u_entry']) * pos['qty']
+                    # 바이낸스: (진입가 - 현재가) * 수량 * 환율 (숏)
                     gross_b = (pos['b_entry'] - curr_b_price) * pos['qty'] * curr_rate
                     
-                    # 2. 종료 수수료 (Exit Fee)
+                    # 2. 종료 수수료
                     exit_fee_u = curr_u_price * pos['qty'] * FEE_UPBIT
                     exit_fee_b = curr_b_price * pos['qty'] * curr_rate * FEE_FOREIGN
                     
-                    # 3. 거래소별 총 수수료 (진입+종료)
                     total_fee_u = pos['entry_fee_u'] + exit_fee_u
                     total_fee_b = pos['entry_fee_b'] + exit_fee_b
                     total_fee_all = total_fee_u + total_fee_b
                     
-                    # 4. 최종 순수익
+                    # 3. 최종 순수익
                     net_pnl = (gross_u + gross_b) - total_fee_all
                     roi = (net_pnl / pos['invest_krw']) * 100
                     
@@ -237,11 +251,11 @@ with tab2:
                     save_trade({
                         "Time": datetime.now().strftime("%m-%d %H:%M"),
                         "Coin": pos['symbol'],
+                        "Lev": f"x{LEVERAGE}",
                         "Invest": int(pos['invest_krw']),
-                        "Upbit Gross": int(gross_u),
-                        "Binance Gross": int(gross_b),
-                        "Upbit Fee": int(total_fee_u),
-                        "Binance Fee": int(total_fee_b),
+                        "Upbit PNL": int(gross_u),
+                        "Binance PNL": int(gross_b),
+                        "Fees": int(total_fee_all),
                         "Net PNL": int(net_pnl),
                         "ROI": f"{roi:.2f}%"
                     })
@@ -312,29 +326,26 @@ while True:
                 curr_b_price = d['b_p']
                 curr_rate = d['rate']
                 
-                # 1. 차익 (Gross PNL)
+                # 차익 (Gross)
                 gross_u = (curr_u_price - pos['u_entry']) * pos['qty']
                 gross_b = (pos['b_entry'] - curr_b_price) * pos['qty'] * curr_rate
                 
-                # 2. ROI 계산 (컬러 표시용)
+                # ROI (투자금 대비)
                 roi_u = (gross_u / pos['invest_krw']) * 100
                 roi_b = (gross_b / pos['invest_krw']) * 100
                 
-                # 3. 실시간 예상 수수료 (진입(확정) + 종료(예상))
-                # 기존 session에 저장된 진입수수료 사용
+                # 실시간 예상 수수료
                 est_exit_fee_u = curr_u_price * pos['qty'] * FEE_UPBIT
                 est_exit_fee_b = curr_b_price * pos['qty'] * curr_rate * FEE_FOREIGN
-                
                 total_fee_u = pos['entry_fee_u'] + est_exit_fee_u
                 total_fee_b = pos['entry_fee_b'] + est_exit_fee_b
                 
-                # 4. 최종 순수익
+                # 순수익
                 net_pnl = (gross_u + gross_b) - (total_fee_u + total_fee_b)
                 net_roi = (net_pnl / pos['invest_krw']) * 100
                 
-                st.markdown(f"**현재 코인:** {pos['symbol']} (Fees Detailed)")
+                st.markdown(f"**현재 코인:** {pos['symbol']} (Lev: x{LEVERAGE})")
                 
-                # [UI] 4단 컬럼 (업비트 수익 / 업비트 수수료 / 바이낸스 수익 / 바이낸스 수수료)
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("업비트 수익", f"{int(gross_u):,} 원", f"{roi_u:.2f}%")
                 c2.metric("업비트 수수료", f"-{int(total_fee_u):,} 원")
@@ -342,7 +353,6 @@ while True:
                 c4.metric("바이낸스 수수료", f"-{int(total_fee_b):,} 원")
                 
                 st.divider()
-                
                 st.metric("최종 순수익 (Net Profit)", f"{int(net_pnl):,} 원", f"{net_roi:.2f}%")
                 
                 st.info(f"진입 김프: {pos['entry_kimp']:.2f}%  👉  현재 김프: {d['premium']:.2f}%")
