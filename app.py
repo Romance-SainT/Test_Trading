@@ -48,7 +48,7 @@ st.markdown("""
     .stSelectbox label { color: white !important; text-align: center; width: 100%; }
     .main-title { font-family: 'Helvetica', sans-serif; font-weight: 800; color: #00d2d3; text-align: center; white-space: nowrap; margin: 10px 0; }
     .header-upbit { color: #f1c40f; font-weight: bold; text-align: center; }
-    .header-coinbase { color: #3498db; font-weight: bold; text-align: center; } /* 코인베이스 파란색 */
+    .header-binance { color: #f39c12; font-weight: bold; text-align: center; }
     .ob-container { font-family: 'Consolas', monospace; text-align: center; background-color: #1e272e; padding: 5px 0; flex-grow: 1; }
     .ob-row { display: flex; justify-content: center; align-items: center; line-height: 1.4; white-space: nowrap; }
     .current-box { margin: 15px 0; text-align: center; background-color: #25282d; border-top: 1px solid #444; border-bottom: 1px solid #444; padding: 15px 0; width: 100%; display: flex; flex-direction: column; justify-content: center; }
@@ -78,7 +78,7 @@ if 'position' not in st.session_state:
     st.session_state['position'] = None 
 
 # ==========================================
-# [5] 데이터 수집 함수 (코인베이스로 변경)
+# [5] 데이터 수집 함수 (Binance.US 사용)
 # ==========================================
 def get_data(symbol):
     # 헤더 설정
@@ -103,37 +103,29 @@ def get_data(symbol):
         u_ob_url = f"https://api.upbit.com/v1/orderbook?markets=KRW-{symbol}"
         u_ob = requests.get(u_ob_url, headers=headers, timeout=5).json()[0]['orderbook_units'][:5]
         
-        # 3. [변경] 코인베이스 (Coinbase) API - 미국 서버에서 접속 가능
-        # 코인베이스는 심볼이 BTC-USD 형태임
-        c_symbol = f"{symbol}-USD"
+        # 3. [핵심 변경] 바이낸스 US (api.binance.us) 사용
+        # 미국 서버에서 접속 가능한 유일한 바이낸스 주소입니다.
+        b_ticker_url = f"https://api.binance.us/api/v3/ticker/price?symbol={symbol}USDT"
+        b_res = requests.get(b_ticker_url, headers=headers, timeout=5)
         
-        # Ticker (현재가)
-        c_ticker_url = f"https://api.exchange.coinbase.com/products/{c_symbol}/ticker"
-        c_res = requests.get(c_ticker_url, headers=headers, timeout=5)
-        if c_res.status_code != 200: return {"error": f"Coinbase Error {c_res.status_code}"}
-        c_ticker = c_res.json()
+        if b_res.status_code != 200:
+            return {"error": f"Binance.US 접속 실패 ({b_res.status_code})"}
+            
+        b_ticker = b_res.json()
         
-        # Orderbook (호가창)
-        c_ob_url = f"https://api.exchange.coinbase.com/products/{c_symbol}/book?level=2"
-        c_ob_res = requests.get(c_ob_url, headers=headers, timeout=5)
-        c_ob_data = c_ob_res.json()
-        
-        # 코인베이스 데이터 포맷팅
-        c_price = float(c_ticker['price'])
-        # 호가창 데이터 [price, size, num_orders] -> 상위 5개만
-        c_asks = c_ob_data['asks'][:5] 
-        c_bids = c_ob_data['bids'][:5]
+        # 호가창 데이터
+        b_ob_url = f"https://api.binance.us/api/v3/depth?symbol={symbol}USDT&limit=5"
+        b_ob = requests.get(b_ob_url, headers=headers, timeout=5).json()
 
         return {
             'rate': rate,
             'u_p': u_ticker['trade_price'],
             'u_asks': sorted(u_ob, key=lambda x: x['ask_price'], reverse=True),
             'u_bids': u_ob,
-            'b_p': c_price,
-            # 코인베이스 호가창 포맷 (문자열이므로 float 변환 필요)
-            'b_asks': sorted(c_asks, key=lambda x: float(x[0]), reverse=True),
-            'b_bids': c_bids,
-            'premium': ((u_ticker['trade_price'] - (c_price * rate)) / (c_price * rate)) * 100
+            'b_p': float(b_ticker['price']),
+            'b_asks': sorted(b_ob['asks'], key=lambda x: float(x[0]), reverse=True),
+            'b_bids': b_ob['bids'],
+            'premium': ((u_ticker['trade_price'] - (float(b_ticker['price']) * rate)) / (float(b_ticker['price']) * rate)) * 100
         }
     except Exception as e:
         return {"error": str(e)}
@@ -179,8 +171,8 @@ with tab2:
         if st.session_state['position'] is None:
             invest_amount = st.number_input("투자할 금액 (원화 KRW)", min_value=100000, max_value=int(st.session_state['balance']), value=1000000, step=100000, key="invest_input")
             
-            # 버튼 텍스트 변경 (바이낸스 -> 코인베이스)
-            if st.button("🚀 포지션 진입 (업비트 매수 + 코인베이스 숏 10배)", key="btn_buy"):
+            # 버튼 이름 다시 바이낸스로 변경
+            if st.button("🚀 포지션 진입 (업비트 매수 + 바이낸스(US) 숏 10배)", key="btn_buy"):
                 current_data = get_data(sym)
                 if current_data and 'error' not in current_data:
                     u_price = current_data['u_p']
@@ -234,10 +226,10 @@ with tab2:
                         "Exit Kimp (종료 김프)": f"{exit_kimp:.2f}%",
                         "U.Entry (업 진입)": int(pos['u_entry']),
                         "U.Exit (업 종료)": int(curr_u_price),
-                        "C.Entry (코 진입)": f"${pos['b_entry']:.2f}",
-                        "C.Exit (코 종료)": f"${curr_b_price:.2f}",
+                        "B.Entry (바 진입)": f"${pos['b_entry']:.2f}",
+                        "B.Exit (바 종료)": f"${curr_b_price:.2f}",
                         "U.PNL (업 손익)": int(pnl_upbit),
-                        "C.PNL (코 손익)": int(pnl_binance_krw),
+                        "B.PNL (바 손익)": int(pnl_binance_krw),
                         "Total PNL (총 손익)": int(total_pnl),
                         "ROI (수익률)": f"{pnl_percent:.2f}%"
                     })
@@ -280,21 +272,20 @@ while True:
             for it in d['u_bids']:
                 u_html += f"<div class='ob-row'><span class='price-col bid-text'>{it['bid_price']:,.0f}</span><span class='sep-col'>|</span><span class='qty-col bid-text'>{it['bid_size']:.3f}</span></div>"
 
-            # [변경] 바이낸스 -> 코인베이스
-            c_html = f"<div class='header-coinbase'>Coinbase</div><div style='color:#5DADE2; font-size:0.7rem; text-align:center;'>▼ Sell</div>"
+            # [다시 바이낸스로 복귀] 대신 이름은 Binance(US)
+            b_html = f"<div class='header-binance'>Binance(US)</div><div style='color:#5DADE2; font-size:0.7rem; text-align:center;'>▼ Sell</div>"
             for it in d['b_asks']:
-                # 코인베이스는 데이터가 [price, size] 문자열로 옴
-                c_html += f"<div class='ob-row'><span class='price-col ask-text'>{float(it[0]):,.2f}</span><span class='sep-col'>|</span><span class='qty-col ask-text'>{float(it[1]):.3f}</span></div>"
-            c_html += f"<div class='current-box'><div class='curr-main'>${d['b_p']:,.2f}</div><div class='curr-sub'>(≈₩{d['b_p']*d['rate']:,.0f})</div></div>"
-            c_html += f"<div style='color:#EC7063; font-size:0.7rem; text-align:center;'>▲ Buy</div>"
+                b_html += f"<div class='ob-row'><span class='price-col ask-text'>{float(it[0]):,.2f}</span><span class='sep-col'>|</span><span class='qty-col ask-text'>{float(it[1]):.3f}</span></div>"
+            b_html += f"<div class='current-box'><div class='curr-main'>${d['b_p']:,.2f}</div><div class='curr-sub'>(≈₩{d['b_p']*d['rate']:,.0f})</div></div>"
+            b_html += f"<div style='color:#EC7063; font-size:0.7rem; text-align:center;'>▲ Buy</div>"
             for it in d['b_bids']:
-                c_html += f"<div class='ob-row'><span class='price-col bid-text'>{float(it[0]):,.2f}</span><span class='sep-col'>|</span><span class='qty-col bid-text'>{float(it[1]):.3f}</span></div>"
+                b_html += f"<div class='ob-row'><span class='price-col bid-text'>{float(it[0]):,.2f}</span><span class='sep-col'>|</span><span class='qty-col bid-text'>{float(it[1]):.3f}</span></div>"
 
             st.markdown(f"""
             <div style='display:flex; width:100%; align-items:stretch;' class='notranslate'>
                 <div class='ob-container' style='flex:1;'>{u_html}</div>
                 <div style='width:1px; background-color:#444;'></div>
-                <div class='ob-container' style='flex:1;'>{c_html}</div>
+                <div class='ob-container' style='flex:1;'>{b_html}</div>
             </div>
             """, unsafe_allow_html=True)
 
@@ -319,7 +310,7 @@ while True:
                 st.markdown(f"**현재 모니터링 중인 코인:** {pos['symbol']}")
                 m1, m2, m3 = st.columns(3)
                 m1.metric("업비트 손익", f"{pnl_upbit:,.0f} 원")
-                m2.metric("코인베이스 숏 손익", f"{pnl_binance_krw:,.0f} 원")
+                m2.metric("바이낸스 숏 손익", f"{pnl_binance_krw:,.0f} 원")
                 m3.metric("🔥 합계 손익 (수익률)", f"{total_pnl:,.0f} 원", f"{pnl_percent:.2f}%")
                 
                 entry_kimp = pos['entry_kimp']
