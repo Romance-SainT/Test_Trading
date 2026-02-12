@@ -9,18 +9,16 @@ from datetime import datetime
 # [1] 페이지 설정
 # ==========================================
 st.set_page_config(
-    page_title="Crypto Master Sim (Fees)",
+    page_title="Crypto Master Sim (Binance.US)",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
 # ==========================================
-# [2] 수수료 설정 (현실 반영)
+# [2] 수수료 설정 (바이낸스 US 기준)
 # ==========================================
-# 업비트: 0.05% (0.0005)
-FEE_UPBIT = 0.0005 
-# 해외(바이낸스/코인베이스 등): 보통 0.04%~0.1% (여기선 보수적으로 0.1% 설정)
-FEE_FOREIGN = 0.001 
+FEE_UPBIT = 0.0005  # 업비트 0.05%
+FEE_FOREIGN = 0.001 # 바이낸스 US 0.1%
 
 # ==========================================
 # [3] 보안 설정
@@ -49,14 +47,16 @@ st.markdown("""
     .stApp { background-color: #1e272e; }
     .notranslate { transform: translateZ(0); -webkit-font-smoothing: antialiased; }
     .block-container { padding-top: 4rem; max_width: 100%; }
+    
     .stTabs [data-baseweb="tab-list"] { gap: 10px; background-color: #1e272e; }
     .stTabs [data-baseweb="tab"] { background-color: #2d3436; border-radius: 5px; color: white; padding: 10px 20px; }
     .stTabs [aria-selected="true"] { background-color: #00d2d3; color: black; font-weight: bold; }
+    
     .stSelectbox label { color: white !important; text-align: center; width: 100%; }
     .main-title { font-family: 'Helvetica', sans-serif; font-weight: 800; color: #00d2d3; text-align: center; white-space: nowrap; margin: 10px 0; }
     
     .header-upbit { color: #f1c40f; font-weight: bold; text-align: center; }
-    .header-coinbase { color: #3498db; font-weight: bold; text-align: center; }
+    .header-binance { color: #f39c12; font-weight: bold; text-align: center; }
     
     .ob-container { font-family: 'Consolas', monospace; text-align: center; background-color: #1e272e; padding: 5px 0; flex-grow: 1; }
     .ob-row { display: flex; justify-content: center; align-items: center; line-height: 1.4; white-space: nowrap; }
@@ -68,7 +68,6 @@ st.markdown("""
     .qty-col { width: 110px; text-align: left; }
     .sep-col { width: 30px; text-align: center; color: #555; }
     
-    /* 수수료 정보 텍스트 */
     .fee-info { font-size: 0.8rem; color: #95a5a6; text-align: center; margin-bottom: 10px; }
     </style>
     """, unsafe_allow_html=True)
@@ -88,7 +87,7 @@ if 'position' not in st.session_state:
     st.session_state['position'] = None 
 
 # ==========================================
-# [6] 데이터 수집 (Coinbase 사용)
+# [6] 데이터 수집 (Binance.US - 미국 서버 차단 우회)
 # ==========================================
 def get_data(symbol):
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -100,7 +99,7 @@ def get_data(symbol):
         except:
             rate = 1450.0
 
-        # 2. 업비트
+        # 2. 업비트 API
         u_url = f"https://api.upbit.com/v1/ticker?markets=KRW-{symbol}"
         u_res = requests.get(u_url, headers=headers, timeout=3)
         if u_res.status_code != 200: return {"error": f"Upbit {u_res.status_code}"}
@@ -109,30 +108,27 @@ def get_data(symbol):
         u_ob_url = f"https://api.upbit.com/v1/orderbook?markets=KRW-{symbol}"
         u_ob = requests.get(u_ob_url, headers=headers, timeout=3).json()[0]['orderbook_units'][:5]
         
-        # 3. 코인베이스 (미국 서버 호환)
-        c_symbol = f"{symbol}-USD"
-        c_ticker_url = f"https://api.exchange.coinbase.com/products/{c_symbol}/ticker"
-        c_res = requests.get(c_ticker_url, headers=headers, timeout=3)
-        if c_res.status_code != 200: return {"error": f"Coinbase {c_res.status_code}"}
-        c_ticker = c_res.json()
+        # 3. 바이낸스 US API (반드시 .us 도메인 사용)
+        b_ticker_url = f"https://api.binance.us/api/v3/ticker/price?symbol={symbol}USDT"
+        b_res = requests.get(b_ticker_url, headers=headers, timeout=3)
         
-        c_price = float(c_ticker['price'])
+        if b_res.status_code != 200:
+            return {"error": f"Binance US 접속실패 ({b_res.status_code})"}
+            
+        b_ticker = b_res.json()
         
-        # 호가창
-        c_ob_url = f"https://api.exchange.coinbase.com/products/{c_symbol}/book?level=2"
-        c_ob = requests.get(c_ob_url, headers=headers, timeout=3).json()
-        c_asks = c_ob['asks'][:5] 
-        c_bids = c_ob['bids'][:5]
+        b_ob_url = f"https://api.binance.us/api/v3/depth?symbol={symbol}USDT&limit=5"
+        b_ob = requests.get(b_ob_url, headers=headers, timeout=3).json()
 
         return {
             'rate': rate,
             'u_p': u_ticker['trade_price'],
             'u_asks': sorted(u_ob, key=lambda x: x['ask_price'], reverse=True),
             'u_bids': u_ob,
-            'b_p': c_price,
-            'b_asks': sorted(c_asks, key=lambda x: float(x[0]), reverse=True),
-            'b_bids': c_bids,
-            'premium': ((u_ticker['trade_price'] - (c_price * rate)) / (c_price * rate)) * 100
+            'b_p': float(b_ticker['price']),
+            'b_asks': sorted(b_ob['asks'], key=lambda x: float(x[0]), reverse=True),
+            'b_bids': b_ob['bids'],
+            'premium': ((u_ticker['trade_price'] - (float(b_ticker['price']) * rate)) / (float(b_ticker['price']) * rate)) * 100
         }
     except Exception as e:
         return {"error": str(e)}
@@ -169,7 +165,7 @@ with tab1:
 
 with tab2:
     st.markdown("### 💼 투자 현황 (Portfolio Status)")
-    st.markdown(f"<div class='fee-info'>※ 수수료 적용: 업비트 {FEE_UPBIT*100}% | 해외 {FEE_FOREIGN*100}%</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='fee-info'>※ 수수료: 업비트 {FEE_UPBIT*100}% | 바이낸스(US) {FEE_FOREIGN*100}% (왕복 자동 차감)</div>", unsafe_allow_html=True)
     
     portfolio_placeholder = st.empty() 
     st.divider()
@@ -181,19 +177,17 @@ with tab2:
         if st.session_state['position'] is None:
             invest_amount = st.number_input("투자할 금액 (원화 KRW)", min_value=100000, max_value=int(st.session_state['balance']), value=1000000, step=100000, key="invest_input")
             
-            if st.button("🚀 포지션 진입 (업비트 매수 + 해외 숏)", key="btn_buy"):
+            # [수정] 버튼 이름 바이낸스로 유지
+            if st.button("🚀 포지션 진입 (업비트 매수 + 바이낸스 숏)", key="btn_buy"):
                 data = get_data(sym)
                 if data and 'error' not in data:
                     u_price = data['u_p']
                     b_price = data['b_p']
                     rate = data['rate']
                     
-                    # 수량 계산
                     btc_qty = invest_amount / u_price
-                    
-                    # [수수료 계산 1] 진입 시 발생하는 수수료
-                    # 업비트 매수 수수료 + 해외 숏 진입 수수료(원화환산)
-                    entry_fee_krw = (invest_amount * FEE_UPBIT) + (b_price * btc_qty * rate * FEE_FOREIGN)
+                    # 진입 수수료 (업비트 + 바이낸스US)
+                    entry_fee = (invest_amount * FEE_UPBIT) + (b_price * btc_qty * rate * FEE_FOREIGN)
                     
                     st.session_state['position'] = {
                         'symbol': sym,
@@ -204,20 +198,18 @@ with tab2:
                         'qty': btc_qty,
                         'rate_entry': rate,
                         'entry_kimp': data['premium'],
-                        'entry_fee': entry_fee_krw # 진입 수수료 저장
+                        'entry_fee': entry_fee
                     }
-                    
-                    # 잔고에서 투자금 차감 (수수료는 나중에 정산하거나 지금 뺄 수 있는데, 여기선 투자금만 차감하고 수수료는 수익에서 뺌)
                     st.session_state['balance'] -= invest_amount
                     st.rerun()
                 else:
-                    st.error("데이터 수신 오류!")
+                    st.error("데이터 수신 오류! (API 확인 필요)")
 
         # B. 청산 (SELL)
         else:
             pnl_placeholder = st.empty()
             
-            if st.button("💰 포지션 종료 (수수료 차감 후 정산)", key="btn_sell"):
+            if st.button("💰 포지션 종료 (정산하기)", key="btn_sell"):
                 data = get_data(sym)
                 if data and 'error' not in data:
                     pos = st.session_state['position']
@@ -225,43 +217,40 @@ with tab2:
                     curr_b_price = data['b_p']
                     curr_rate = data['rate']
                     
-                    # 1. 차익(Gross PNL) 계산
-                    gross_pnl_upbit = (curr_u_price - pos['u_entry']) * pos['qty']
-                    gross_pnl_foreign = (pos['b_entry'] - curr_b_price) * pos['qty'] * curr_rate
-                    gross_total = gross_pnl_upbit + gross_pnl_foreign
+                    # 차익 계산 (Gross PNL)
+                    pnl_upbit = (curr_u_price - pos['u_entry']) * pos['qty']
+                    pnl_foreign = (pos['b_entry'] - curr_b_price) * pos['qty'] * curr_rate
+                    gross_total = pnl_upbit + pnl_foreign
                     
-                    # 2. 종료 수수료(Exit Fee) 계산
-                    # 업비트 매도 수수료 + 해외 숏 종료 수수료
-                    exit_fee_krw = (curr_u_price * pos['qty'] * FEE_UPBIT) + (curr_b_price * pos['qty'] * curr_rate * FEE_FOREIGN)
+                    # 수수료 계산 (Exit Fee)
+                    exit_fee = (curr_u_price * pos['qty'] * FEE_UPBIT) + (curr_b_price * pos['qty'] * curr_rate * FEE_FOREIGN)
+                    total_fee = pos['entry_fee'] + exit_fee
                     
-                    # 3. 최종 순수익 (Net PNL) = 차익 - (진입수수료 + 종료수수료)
-                    total_fee = pos['entry_fee'] + exit_fee_krw
+                    # 최종 순수익 (Net PNL)
                     net_pnl = gross_total - total_fee
-                    
-                    # 수익률
                     roi = (net_pnl / pos['invest_krw']) * 100
                     
-                    # 잔고 업데이트 (원금 + 순수익)
                     st.session_state['balance'] += (pos['invest_krw'] + net_pnl)
                     
                     save_trade({
                         "Time": datetime.now().strftime("%m-%d %H:%M"),
                         "Coin": pos['symbol'],
                         "Invest": int(pos['invest_krw']),
-                        "Gross PNL(차익)": int(gross_total),
-                        "Fees(수수료)": int(total_fee),
-                        "Net PNL(순수익)": int(net_pnl),
-                        "ROI(%)": f"{roi:.2f}%"
+                        "Upbit PNL": int(pnl_upbit),
+                        "Binance PNL": int(pnl_foreign),
+                        "Fees": int(total_fee),
+                        "Net PNL": int(net_pnl),
+                        "ROI": f"{roi:.2f}%"
                     })
                     
                     st.session_state['position'] = None
-                    st.success(f"거래 종료! 수수료 {int(total_fee):,}원을 제외한 순수익: {int(net_pnl):,}원")
+                    st.success(f"거래 종료! 순수익: {int(net_pnl):,}원")
                     time.sleep(2)
                     st.rerun()
                 else:
-                    st.error("데이터 수신 오류!")
+                    st.error("데이터 수신 오류! (API 확인 필요)")
 
-    st.markdown("### 📜 상세 매매 기록 (Fees Applied)")
+    st.markdown("### 📜 상세 매매 기록")
     history_df = load_trades()
     if not history_df.empty:
         st.dataframe(history_df.sort_index(ascending=False), use_container_width=True)
@@ -284,7 +273,6 @@ while True:
             </div>
             """, unsafe_allow_html=True)
 
-            # 호가창 그리기 (이전과 동일)
             u_html = f"<div class='header-upbit'>Upbit</div><div style='color:#5DADE2; font-size:0.7rem; text-align:center;'>▼ Sell</div>"
             for it in d['u_asks']:
                 u_html += f"<div class='ob-row'><span class='price-col ask-text'>{it['ask_price']:,.0f}</span><span class='sep-col'>|</span><span class='qty-col ask-text'>{it['ask_size']:.3f}</span></div>"
@@ -293,19 +281,20 @@ while True:
             for it in d['u_bids']:
                 u_html += f"<div class='ob-row'><span class='price-col bid-text'>{it['bid_price']:,.0f}</span><span class='sep-col'>|</span><span class='qty-col bid-text'>{it['bid_size']:.3f}</span></div>"
 
-            c_html = f"<div class='header-coinbase'>Coinbase</div><div style='color:#5DADE2; font-size:0.7rem; text-align:center;'>▼ Sell</div>"
+            # [수정] 바이낸스 US 호가창
+            b_html = f"<div class='header-binance'>Binance(US)</div><div style='color:#5DADE2; font-size:0.7rem; text-align:center;'>▼ Sell</div>"
             for it in d['b_asks']:
-                c_html += f"<div class='ob-row'><span class='price-col ask-text'>{float(it[0]):,.2f}</span><span class='sep-col'>|</span><span class='qty-col ask-text'>{float(it[1]):.3f}</span></div>"
-            c_html += f"<div class='current-box'><div class='curr-main'>${d['b_p']:,.2f}</div><div class='curr-sub'>(≈₩{d['b_p']*d['rate']:,.0f})</div></div>"
-            c_html += f"<div style='color:#EC7063; font-size:0.7rem; text-align:center;'>▲ Buy</div>"
+                b_html += f"<div class='ob-row'><span class='price-col ask-text'>{float(it[0]):,.2f}</span><span class='sep-col'>|</span><span class='qty-col ask-text'>{float(it[1]):.3f}</span></div>"
+            b_html += f"<div class='current-box'><div class='curr-main'>${d['b_p']:,.2f}</div><div class='curr-sub'>(≈₩{d['b_p']*d['rate']:,.0f})</div></div>"
+            b_html += f"<div style='color:#EC7063; font-size:0.7rem; text-align:center;'>▲ Buy</div>"
             for it in d['b_bids']:
-                c_html += f"<div class='ob-row'><span class='price-col bid-text'>{float(it[0]):,.2f}</span><span class='sep-col'>|</span><span class='qty-col bid-text'>{float(it[1]):.3f}</span></div>"
+                b_html += f"<div class='ob-row'><span class='price-col bid-text'>{float(it[0]):,.2f}</span><span class='sep-col'>|</span><span class='qty-col bid-text'>{float(it[1]):.3f}</span></div>"
 
             st.markdown(f"""
             <div style='display:flex; width:100%; align-items:stretch;' class='notranslate'>
                 <div class='ob-container' style='flex:1;'>{u_html}</div>
                 <div style='width:1px; background-color:#444;'></div>
-                <div class='ob-container' style='flex:1;'>{c_html}</div>
+                <div class='ob-container' style='flex:1;'>{b_html}</div>
             </div>
             """, unsafe_allow_html=True)
 
@@ -321,33 +310,35 @@ while True:
                 curr_b_price = d['b_p']
                 curr_rate = d['rate']
                 
-                # 1. 현재 시점의 차익 (Gross)
-                gross_upbit = (curr_u_price - pos['u_entry']) * pos['qty']
-                gross_foreign = (pos['b_entry'] - curr_b_price) * pos['qty'] * curr_rate
-                gross_total = gross_upbit + gross_foreign
+                # 1. 차익 계산 (Gross PNL)
+                pnl_upbit = (curr_u_price - pos['u_entry']) * pos['qty']
+                pnl_foreign = (pos['b_entry'] - curr_b_price) * pos['qty'] * curr_rate
                 
-                # 2. 예상 종료 수수료 (Exit Fee)
+                # 2. 수수료 합계 (진입+청산)
                 est_exit_fee = (curr_u_price * pos['qty'] * FEE_UPBIT) + (curr_b_price * pos['qty'] * curr_rate * FEE_FOREIGN)
+                total_fee = pos['entry_fee'] + est_exit_fee
                 
-                # 3. 진입 수수료 (이미 확정됨)
-                entry_fee = pos['entry_fee']
-                
-                # 4. 순수익 (Net)
-                total_fee = entry_fee + est_exit_fee
-                net_pnl = gross_total - total_fee
+                # 3. 최종 순수익
+                net_pnl = (pnl_upbit + pnl_foreign) - total_fee
                 net_roi = (net_pnl / pos['invest_krw']) * 100
                 
-                st.markdown(f"**현재 코인:** {pos['symbol']} (Fees applied)")
+                # [UI] 3단 분리 표시 (업비트 | 바이낸스 | 수수료) -> 최종 수익
+                st.markdown(f"**현재 코인:** {pos['symbol']} (Binance US)")
+                
                 m1, m2, m3 = st.columns(3)
-                m1.metric("단순 매매 차익", f"{int(gross_total):,} 원")
-                m2.metric("예상 수수료 (왕복)", f"-{int(total_fee):,} 원")
-                # 순수익은 색깔을 넣어 강조
+                m1.metric("업비트 차익", f"{int(pnl_upbit):,} 원")
+                m2.metric("바이낸스 숏 차익", f"{int(pnl_foreign):,} 원")
+                m3.metric("예상 수수료", f"-{int(total_fee):,} 원")
+                
+                st.divider()
                 color = "red" if net_pnl > 0 else "blue"
-                m3.markdown(f"""
-                <div style="text-align: center;">
-                    <span style="font-size: 0.8rem; color: #bdc3c7;">최종 순수익 (Net PNL)</span><br>
-                    <span style="font-size: 1.5rem; font-weight: bold; color: {color};">{int(net_pnl):,} 원</span>
-                    <span style="font-size: 1rem; color: {color};">({net_roi:.2f}%)</span>
+                
+                # 최종 결과 강조 박스
+                st.markdown(f"""
+                <div style="text-align: center; background-color: rgba(0,0,0,0.2); padding: 10px; border-radius: 10px;">
+                    <span style="font-size: 1rem; color: #bdc3c7;">최종 순수익 (Net Profit)</span><br>
+                    <span style="font-size: 2rem; font-weight: bold; color: {color};">{int(net_pnl):,} 원</span>
+                    <span style="font-size: 1.2rem; color: {color};"> ({net_roi:.2f}%)</span>
                 </div>
                 """, unsafe_allow_html=True)
                 
