@@ -9,7 +9,7 @@ from datetime import datetime
 # [1] 페이지 설정
 # ==========================================
 st.set_page_config(
-    page_title="Crypto Master Sim (Korean)",
+    page_title="Crypto Master Sim (Final)",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -124,16 +124,16 @@ def get_data(symbol):
         return {"error": str(e)}
 
 # ==========================================
-# [7] 파일 함수 (한글 헤더 적용)
+# [7] 파일 함수 (호환성 기능 추가)
 # ==========================================
 def save_trade_summary(trade_data):
-    # 한글 컬럼명 변환
+    # 한글 컬럼으로 저장
     kor_data = {
-        "시간": trade_data["Time"],
-        "코인": trade_data["Coin"],
-        "순수익(원)": trade_data["Net PNL"],
-        "수익률(%)": trade_data["ROI"],
-        "로그파일": trade_data["Log File"]
+        "시간": trade_data.get("Time"),
+        "코인": trade_data.get("Coin"),
+        "순수익(원)": trade_data.get("Net PNL"),
+        "수익률(%)": trade_data.get("ROI"),
+        "로그파일": trade_data.get("Log File")
     }
     df = pd.DataFrame([kor_data])
     if not os.path.exists(HISTORY_FILE):
@@ -159,7 +159,20 @@ def get_log_files():
     files.sort(reverse=True)
     return files
 
-# 데이터프레임 색상 스타일
+# [NEW] 영문 컬럼을 한글로 바꿔주는 함수 (호환성 해결사)
+def standardize_columns(df):
+    mapping = {
+        'Time': '시간',
+        'Upbit_Price': '업비트(KRW)',
+        'Binance_Price': '바이낸스($)',
+        'Premium(%)': '김프(%)',
+        'Net_PNL': '순수익(원)',
+        'ROI(%)': '수익률(%)',
+        'Status': '상태'
+    }
+    return df.rename(columns=mapping)
+
+# 스타일링 함수
 def format_with_change(val, change, is_currency=True, currency_symbol=""):
     if pd.isna(change) or change == 0:
         chg_str = "-"
@@ -198,7 +211,9 @@ with tab2:
     portfolio_placeholder = st.empty() 
     st.divider()
     
-    live_chart_placeholder = st.empty()
+    # [NEW] 그래프 대신 테이블을 보여줄 공간
+    st.markdown("#### 📝 실시간 기록 (Live Log)")
+    live_table_placeholder = st.empty()
 
     sim_controls = st.container()
     
@@ -276,7 +291,7 @@ with tab2:
                         "Log File": pos['log_filename']
                     })
                     
-                    # [한글 컬럼] 마지막 기록
+                    # 종료 로그 (한글)
                     save_position_log(pos['log_filename'], {
                         "시간": datetime.now().strftime("%H:%M:%S"),
                         "업비트(KRW)": curr_u_price,
@@ -301,7 +316,7 @@ with tab2:
     else:
         st.info("거래 기록 없음")
 
-# --- [Tab 3] 로그 파일 뷰어 (한글 컬럼 반영) ---
+# --- [Tab 3] 로그 파일 뷰어 (호환성 개선) ---
 with tab3:
     st.markdown("### 📂 개별 포지션 상세 분석 (Log Viewer)")
     
@@ -315,44 +330,35 @@ with tab3:
             try:
                 df_log = pd.read_csv(selected_file)
                 
-                if not df_log.empty:
-                    # [핵심] 한글 컬럼명 기반으로 변동폭 계산
-                    # 파일에 '업비트(KRW)' 등의 한글 헤더가 있어야 함
+                # [호환성 처리] 영문 컬럼이 있으면 한글로 변환
+                df_log = standardize_columns(df_log)
+                
+                if not df_log.empty and '업비트(KRW)' in df_log.columns:
+                    # 변동폭 계산
+                    df_log['업_변동'] = df_log['업비트(KRW)'].diff().fillna(0)
+                    df_log['바_변동'] = df_log['바이낸스($)'].diff().fillna(0)
+                    df_log['수익_변동'] = df_log['순수익(원)'].diff().fillna(0)
                     
-                    # 만약 옛날 파일(영어 헤더)이라면 에러 방지용 매핑 필요하지만
-                    # 여기서는 새로 만든 한글 파일 기준으로 작성
-                    if '업비트(KRW)' in df_log.columns:
-                        df_log['업_변동'] = df_log['업비트(KRW)'].diff().fillna(0)
-                        df_log['바_변동'] = df_log['바이낸스($)'].diff().fillna(0)
-                        df_log['수익_변동'] = df_log['순수익(원)'].diff().fillna(0)
-                        
-                        df_view = pd.DataFrame()
-                        df_view['시간'] = df_log['시간']
-                        df_view['업비트 (변동)'] = [format_with_change(v, d, True, "₩") for v, d in zip(df_log['업비트(KRW)'], df_log['업_변동'])]
-                        df_view['바이낸스 (변동)'] = [format_with_change(v, d, True, "$") for v, d in zip(df_log['바이낸스($)'], df_log['바_변동'])]
-                        df_view['김프(%)'] = df_log['김프(%)']
-                        df_view['순수익 (변동)'] = [format_with_change(v, d, True, "₩") for v, d in zip(df_log['순수익(원)'], df_log['수익_변동'])]
-                        
-                        # 차트 (순수익 기준)
-                        c1, c2 = st.columns([2, 1])
-                        with c1:
-                            st.markdown(f"#### 📈 수익금 흐름: {selected_file}")
-                            st.line_chart(df_log, x='시간', y='순수익(원)', height=250)
-                        with c2:
-                            last_row = df_log.iloc[-1]
-                            st.markdown("#### 🏁 최종 결과")
-                            st.metric("최종 순수익", f"{int(last_row['순수익(원)']):,} 원")
-                            st.metric("최종 수익률", f"{last_row['수익률(%)']}%")
+                    # 뷰 전용 데이터프레임
+                    df_view = pd.DataFrame()
+                    df_view['시간'] = df_log['시간']
+                    df_view['업비트 (변동)'] = [format_with_change(v, d, True, "₩") for v, d in zip(df_log['업비트(KRW)'], df_log['업_변동'])]
+                    df_view['바이낸스 (변동)'] = [format_with_change(v, d, True, "$") for v, d in zip(df_log['바이낸스($)'], df_log['바_변동'])]
+                    df_view['김프(%)'] = df_log['김프(%)']
+                    df_view['순수익 (변동)'] = [format_with_change(v, d, True, "₩") for v, d in zip(df_log['순수익(원)'], df_log['수익_변동'])]
+                    
+                    # 최종 결과 요약
+                    last_row = df_log.iloc[-1]
+                    c1, c2 = st.columns(2)
+                    c1.metric("최종 순수익", f"{int(last_row['순수익(원)']):,} 원")
+                    c2.metric("최종 수익률", f"{last_row['수익률(%)']}%")
 
-                        st.markdown("#### 📋 1분 단위 상세 변동 내역")
-                        st.dataframe(
-                            df_view.style.map(apply_color, subset=['업비트 (변동)', '바이낸스 (변동)', '순수익 (변동)']),
-                            use_container_width=True,
-                            height=400
-                        )
-                    else:
-                        st.warning("이 파일은 이전 버전 형식이거나 데이터가 없습니다.")
-                        st.dataframe(df_log) # 그냥 원본 표시
+                    st.markdown("#### 📋 1분 단위 상세 변동 내역")
+                    st.dataframe(
+                        df_view.style.map(apply_color, subset=['업비트 (변동)', '바이낸스 (변동)', '순수익 (변동)']),
+                        use_container_width=True,
+                        height=500
+                    )
                     
                     st.download_button(
                         label="💾 엑셀용 CSV 다운로드",
@@ -361,7 +367,8 @@ with tab3:
                         mime='text/csv',
                     )
                 else:
-                    st.warning("파일이 비어있습니다.")
+                    st.warning("데이터 형식이 올바르지 않거나 비어있습니다.")
+                    st.dataframe(df_log)
             except Exception as e:
                 st.error(f"파일 오류: {e}")
     else:
@@ -369,7 +376,7 @@ with tab3:
 
 
 # ==========================================
-# [9] 루프 (한글 컬럼 저장)
+# [9] 루프 (1분 기록 및 실시간 테이블)
 # ==========================================
 while True:
     d = get_data(sym)
@@ -443,14 +450,16 @@ while True:
         if st.session_state['position']:
             pos = st.session_state['position']
             
-            with live_chart_placeholder.container():
+            # [NEW] 실시간 테이블 (최신 5개 데이터)
+            with live_table_placeholder.container():
                 if os.path.exists(pos['log_filename']):
                     try:
                         df_log = pd.read_csv(pos['log_filename'])
-                        # 차트 그릴 때 한글 컬럼 사용
-                        if not df_log.empty and '순수익(원)' in df_log.columns:
-                            st.caption(f"📡 기록 중: {pos['log_filename']} ({len(df_log)}분 경과)")
-                            st.line_chart(df_log, x="시간", y="순수익(원)", height=200)
+                        df_log = standardize_columns(df_log) # 호환성 처리
+                        if not df_log.empty:
+                            st.caption(f"📡 기록 중: {pos['log_filename']} (총 {len(df_log)}분)")
+                            # 최신순으로 정렬해서 보여주기
+                            st.dataframe(df_log.tail(10).sort_index(ascending=False), use_container_width=True)
                     except: pass
 
             with pnl_placeholder.container():
