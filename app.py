@@ -9,7 +9,7 @@ from datetime import datetime
 # [1] 페이지 설정
 # ==========================================
 st.set_page_config(
-    page_title="Crypto Master Sim (Final)",
+    page_title="Crypto Master Sim (Final v2)",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -124,13 +124,65 @@ def get_data(symbol):
         return {"error": str(e)}
 
 # ==========================================
-# [7] 파일 함수 (호환성 기능 추가)
+# [7] 유틸리티 함수 (여기서 정의)
 # ==========================================
+
+def apply_color(val):
+    val_str = str(val)
+    if '🔺' in val_str: 
+        return 'color: #ff4b4b; font-weight: bold;' 
+    elif '🔻' in val_str: 
+        return 'color: #1e90ff; font-weight: bold;' 
+    return 'color: #bdc3c7;'
+
+def format_with_change(val, change, is_currency=True, currency_symbol=""):
+    if pd.isna(change) or change == 0:
+        chg_str = "-"
+    elif change > 0:
+        chg_str = f"🔺{change:,.0f}" if is_currency else f"🔺{change:,.2f}"
+    else:
+        chg_str = f"🔻{abs(change):,.0f}" if is_currency else f"🔻{abs(change):,.2f}"
+    
+    val_str = f"{val:,.0f}" if is_currency else f"{val:,.2f}"
+    return f"{currency_symbol}{val_str} ({chg_str})"
+
+def process_log_for_display(df):
+    mapping = {
+        'Time': '시간', 'Upbit_Price': '업비트(KRW)', 'Binance_Price': '바이낸스($)',
+        'Premium(%)': '김프(%)', 'Net_PNL': '순수익(원)', 'ROI(%)': '수익률(%)', 'Status': '상태'
+    }
+    df = df.rename(columns=mapping)
+    
+    required = ['시간', '업비트(KRW)', '바이낸스($)', '김프(%)', '순수익(원)', '수익률(%)']
+    if not all(col in df.columns for col in required):
+        return df 
+
+    df['업_변동'] = df['업비트(KRW)'].diff().fillna(0)
+    df['바_변동'] = df['바이낸스($)'].diff().fillna(0)
+    df['수익_변동'] = df['순수익(원)'].diff().fillna(0)
+
+    display_df = pd.DataFrame()
+    display_df['시간'] = df['시간']
+    display_df['업비트 (변동)'] = [format_with_change(v, d, True, "₩") for v, d in zip(df['업비트(KRW)'], df['업_변동'])]
+    display_df['바이낸스 (변동)'] = [format_with_change(v, d, True, "$") for v, d in zip(df['바이낸스($)'], df['바_변동'])]
+    display_df['김프(%)'] = df['김프(%)']
+    display_df['순수익 (변동)'] = [format_with_change(v, d, True, "₩") for v, d in zip(df['순수익(원)'], df['수익_변동'])]
+    display_df['수익률(%)'] = df['수익률(%)'].apply(lambda x: f"{x:.2f}%")
+    
+    return display_df
+
+# [수정된 함수] 요약본 저장 시 모든 필드 포함
 def save_trade_summary(trade_data):
-    # 한글 컬럼으로 저장
+    # 이제 모든 컬럼을 한글 키로 매핑해서 저장
     kor_data = {
         "시간": trade_data.get("Time"),
         "코인": trade_data.get("Coin"),
+        "수량": trade_data.get("Qty"),
+        "업진입": trade_data.get("U.Entry"),
+        "업청산": trade_data.get("U.Exit"),
+        "바진입": trade_data.get("B.Entry"),
+        "바청산": trade_data.get("B.Exit"),
+        "수수료": trade_data.get("Fees"),
         "순수익(원)": trade_data.get("Net PNL"),
         "수익률(%)": trade_data.get("ROI"),
         "로그파일": trade_data.get("Log File")
@@ -139,6 +191,8 @@ def save_trade_summary(trade_data):
     if not os.path.exists(HISTORY_FILE):
         df.to_csv(HISTORY_FILE, index=False, encoding='utf-8-sig')
     else:
+        # 기존 파일과 컬럼 개수가 안 맞아도 일단 append (header=False)
+        # 하지만 사용자가 '초기화'를 한번 해주는게 가장 깔끔함
         df.to_csv(HISTORY_FILE, mode='a', header=False, index=False, encoding='utf-8-sig')
 
 def load_trade_summary():
@@ -158,36 +212,6 @@ def get_log_files():
     files = [f for f in os.listdir() if f.startswith('log_') and f.endswith('.csv')]
     files.sort(reverse=True)
     return files
-
-# [NEW] 영문 컬럼을 한글로 바꿔주는 함수 (호환성 해결사)
-def standardize_columns(df):
-    mapping = {
-        'Time': '시간',
-        'Upbit_Price': '업비트(KRW)',
-        'Binance_Price': '바이낸스($)',
-        'Premium(%)': '김프(%)',
-        'Net_PNL': '순수익(원)',
-        'ROI(%)': '수익률(%)',
-        'Status': '상태'
-    }
-    return df.rename(columns=mapping)
-
-# 스타일링 함수
-def format_with_change(val, change, is_currency=True, currency_symbol=""):
-    if pd.isna(change) or change == 0:
-        chg_str = "-"
-    elif change > 0:
-        chg_str = f"🔺{change:,.0f}" if is_currency else f"🔺{change:,.2f}"
-    else:
-        chg_str = f"🔻{abs(change):,.0f}" if is_currency else f"🔻{abs(change):,.2f}"
-    
-    val_str = f"{val:,.0f}" if is_currency else f"{val:,.2f}"
-    return f"{currency_symbol}{val_str} ({chg_str})"
-
-def apply_color(val):
-    if '🔺' in str(val): return 'color: #ff4b4b; font-weight: bold;' 
-    if '🔻' in str(val): return 'color: #1e90ff; font-weight: bold;' 
-    return 'color: #bdc3c7;' 
 
 # ==========================================
 # [8] UI 구성
@@ -211,9 +235,8 @@ with tab2:
     portfolio_placeholder = st.empty() 
     st.divider()
     
-    # [NEW] 그래프 대신 테이블을 보여줄 공간
-    st.markdown("#### 📝 실시간 기록 (Live Log)")
-    live_table_placeholder = st.empty()
+    st.markdown("#### 📝 실시간 1분 기록 (Real-time Log)")
+    live_log_placeholder = st.empty()
 
     sim_controls = st.container()
     
@@ -283,15 +306,22 @@ with tab2:
                     
                     st.session_state['balance'] += (pos['invest_krw'] + net_pnl)
                     
+                    # [수정] 모든 필드를 다 넘겨줍니다.
                     save_trade_summary({
                         "Time": datetime.now().strftime("%m-%d %H:%M"),
                         "Coin": pos['symbol'],
+                        "Qty": f"{pos['qty']:.6f}",
+                        "U.Entry": int(pos['u_entry']),
+                        "U.Exit": int(curr_u_price),
+                        "B.Entry": f"${pos['b_entry']:.2f}",
+                        "B.Exit": f"${curr_b_price:.2f}",
+                        "Fees": int(total_fee),
                         "Net PNL": int(net_pnl),
                         "ROI": f"{roi:.2f}%",
                         "Log File": pos['log_filename']
                     })
                     
-                    # 종료 로그 (한글)
+                    # 종료 로그
                     save_position_log(pos['log_filename'], {
                         "시간": datetime.now().strftime("%H:%M:%S"),
                         "업비트(KRW)": curr_u_price,
@@ -309,14 +339,23 @@ with tab2:
                 else:
                     st.error("데이터 수신 오류!")
 
-    st.markdown("### 📜 상세 매매 기록 (Summary)")
+    st.markdown("### 📜 전체 매매 요약 (Summary)")
+    
+    # [NEW] 기록 초기화 버튼 (꼬인 파일 삭제용)
+    if st.button("🗑️ 기록 초기화 (파일 꼬였을 때 누르세요)"):
+        if os.path.exists(HISTORY_FILE):
+            os.remove(HISTORY_FILE)
+            st.success("기록 파일이 초기화되었습니다. 새로고침 됩니다.")
+            time.sleep(1)
+            st.rerun()
+
     history_df = load_trade_summary()
     if not history_df.empty:
         st.dataframe(history_df.sort_index(ascending=False), use_container_width=True)
     else:
         st.info("거래 기록 없음")
 
-# --- [Tab 3] 로그 파일 뷰어 (호환성 개선) ---
+# --- [Tab 3] 로그 파일 뷰어 ---
 with tab3:
     st.markdown("### 📂 개별 포지션 상세 분석 (Log Viewer)")
     
@@ -330,32 +369,29 @@ with tab3:
             try:
                 df_log = pd.read_csv(selected_file)
                 
-                # [호환성 처리] 영문 컬럼이 있으면 한글로 변환
-                df_log = standardize_columns(df_log)
-                
-                if not df_log.empty and '업비트(KRW)' in df_log.columns:
-                    # 변동폭 계산
-                    df_log['업_변동'] = df_log['업비트(KRW)'].diff().fillna(0)
-                    df_log['바_변동'] = df_log['바이낸스($)'].diff().fillna(0)
-                    df_log['수익_변동'] = df_log['순수익(원)'].diff().fillna(0)
+                if not df_log.empty:
+                    # 함수 호출
+                    df_display = process_log_for_display(df_log)
                     
-                    # 뷰 전용 데이터프레임
-                    df_view = pd.DataFrame()
-                    df_view['시간'] = df_log['시간']
-                    df_view['업비트 (변동)'] = [format_with_change(v, d, True, "₩") for v, d in zip(df_log['업비트(KRW)'], df_log['업_변동'])]
-                    df_view['바이낸스 (변동)'] = [format_with_change(v, d, True, "$") for v, d in zip(df_log['바이낸스($)'], df_log['바_변동'])]
-                    df_view['김프(%)'] = df_log['김프(%)']
-                    df_view['순수익 (변동)'] = [format_with_change(v, d, True, "₩") for v, d in zip(df_log['순수익(원)'], df_log['수익_변동'])]
-                    
-                    # 최종 결과 요약
-                    last_row = df_log.iloc[-1]
-                    c1, c2 = st.columns(2)
-                    c1.metric("최종 순수익", f"{int(last_row['순수익(원)']):,} 원")
-                    c2.metric("최종 수익률", f"{last_row['수익률(%)']}%")
+                    if '순수익(원)' in df_log.columns or 'Net_PNL' in df_log.columns:
+                        # 호환성 체크
+                        pnl_col = '순수익(원)' if '순수익(원)' in df_log.columns else 'Net_PNL'
+                        
+                        c1, c2 = st.columns([2, 1])
+                        with c1:
+                            st.line_chart(df_log, x='시간' if '시간' in df_log.columns else 'Time', y=pnl_col, height=250)
+                        with c2:
+                            last_row = df_log.iloc[-1]
+                            # 안전하게 값 가져오기
+                            last_pnl = last_row.get('순수익(원)') or last_row.get('Net_PNL')
+                            last_roi = last_row.get('수익률(%)') or last_row.get('ROI(%)')
+                            
+                            st.metric("최종 순수익", f"{int(last_pnl):,} 원")
+                            st.metric("최종 수익률", f"{last_roi}%")
 
                     st.markdown("#### 📋 1분 단위 상세 변동 내역")
                     st.dataframe(
-                        df_view.style.map(apply_color, subset=['업비트 (변동)', '바이낸스 (변동)', '순수익 (변동)']),
+                        df_display.sort_index(ascending=False).style.map(apply_color, subset=['업비트 (변동)', '바이낸스 (변동)', '순수익 (변동)']),
                         use_container_width=True,
                         height=500
                     )
@@ -367,8 +403,7 @@ with tab3:
                         mime='text/csv',
                     )
                 else:
-                    st.warning("데이터 형식이 올바르지 않거나 비어있습니다.")
-                    st.dataframe(df_log)
+                    st.warning("파일이 비어있습니다.")
             except Exception as e:
                 st.error(f"파일 오류: {e}")
     else:
@@ -376,7 +411,7 @@ with tab3:
 
 
 # ==========================================
-# [9] 루프 (1분 기록 및 실시간 테이블)
+# [9] 루프
 # ==========================================
 while True:
     d = get_data(sym)
@@ -396,7 +431,6 @@ while True:
                 cur_net_pnl = (gross_u + gross_b) - (pos['entry_fee_u'] + pos['entry_fee_b'] + est_fee)
                 cur_roi = (cur_net_pnl / pos['invest_krw']) * 100
                 
-                # [한글 저장]
                 save_position_log(pos['log_filename'], {
                     "시간": datetime.now().strftime("%H:%M:%S"),
                     "업비트(KRW)": d['u_p'],
@@ -450,22 +484,23 @@ while True:
         if st.session_state['position']:
             pos = st.session_state['position']
             
-            # [NEW] 실시간 테이블 (최신 5개 데이터)
-            with live_table_placeholder.container():
+            # [실시간 1분 기록 테이블]
+            with live_log_placeholder.container():
                 if os.path.exists(pos['log_filename']):
                     try:
                         df_log = pd.read_csv(pos['log_filename'])
-                        df_log = standardize_columns(df_log) # 호환성 처리
                         if not df_log.empty:
+                            df_display = process_log_for_display(df_log)
                             st.caption(f"📡 기록 중: {pos['log_filename']} (총 {len(df_log)}분)")
-                            # 최신순으로 정렬해서 보여주기
-                            st.dataframe(df_log.tail(10).sort_index(ascending=False), use_container_width=True)
+                            st.dataframe(
+                                df_display.tail(5).sort_index(ascending=False).style.map(apply_color, subset=['업비트 (변동)', '바이낸스 (변동)', '순수익 (변동)']),
+                                use_container_width=True
+                            )
                     except: pass
 
             with pnl_placeholder.container():
                 gross_u = (d['u_p'] - pos['u_entry']) * pos['qty']
                 gross_b = (pos['b_entry'] - d['b_p']) * pos['qty'] * d['rate']
-                
                 est_fee = (d['u_p'] * pos['qty'] * FEE_UPBIT) + (d['b_p'] * pos['qty'] * d['rate'] * FEE_FOREIGN)
                 total_fee = pos['entry_fee_u'] + pos['entry_fee_b'] + est_fee
                 net_pnl = (gross_u + gross_b) - total_fee
