@@ -9,7 +9,7 @@ from datetime import datetime
 # [1] 페이지 설정
 # ==========================================
 st.set_page_config(
-    page_title="Crypto Master Sim (Final v2)",
+    page_title="Crypto Master Sim (Pro)",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -124,7 +124,7 @@ def get_data(symbol):
         return {"error": str(e)}
 
 # ==========================================
-# [7] 유틸리티 함수 (여기서 정의)
+# [7] 유틸리티 & 파일 함수
 # ==========================================
 
 def apply_color(val):
@@ -147,52 +147,50 @@ def format_with_change(val, change, is_currency=True, currency_symbol=""):
     return f"{currency_symbol}{val_str} ({chg_str})"
 
 def process_log_for_display(df):
+    # 컬럼 매핑 (호환성)
     mapping = {
-        'Time': '시간', 'Upbit_Price': '업비트(KRW)', 'Binance_Price': '바이낸스($)',
-        'Premium(%)': '김프(%)', 'Net_PNL': '순수익(원)', 'ROI(%)': '수익률(%)', 'Status': '상태'
+        'Time': '시간', 'Qty': '보유수량', 
+        'U_Entry': '업비트 진입', 'B_Entry': '바이낸스 진입',
+        'U_Curr': '업비트 현재', 'B_Curr': '바이낸스 현재',
+        'Premium': '김프(%)', 'Net_PNL': '순수익(원)', 'ROI': '수익률(%)'
     }
     df = df.rename(columns=mapping)
     
-    required = ['시간', '업비트(KRW)', '바이낸스($)', '김프(%)', '순수익(원)', '수익률(%)']
-    if not all(col in df.columns for col in required):
-        return df 
+    # 변동폭 계산
+    if '업비트 현재' in df.columns:
+        df['업_변동'] = df['업비트 현재'].diff().fillna(0)
+        df['바_변동'] = df['바이낸스 현재'].diff().fillna(0)
+        df['수익_변동'] = df['순수익(원)'].diff().fillna(0)
 
-    df['업_변동'] = df['업비트(KRW)'].diff().fillna(0)
-    df['바_변동'] = df['바이낸스($)'].diff().fillna(0)
-    df['수익_변동'] = df['순수익(원)'].diff().fillna(0)
+        display_df = pd.DataFrame()
+        display_df['시간'] = df['시간']
+        display_df['보유수량'] = df['보유수량']
+        
+        # 진입가는 변동이 없으므로 그대로 표시
+        display_df['업비트 진입'] = df['업비트 진입'].apply(lambda x: f"{x:,.0f}")
+        display_df['바이낸스 진입'] = df['바이낸스 진입'].apply(lambda x: f"{x:,.2f}")
 
-    display_df = pd.DataFrame()
-    display_df['시간'] = df['시간']
-    display_df['업비트 (변동)'] = [format_with_change(v, d, True, "₩") for v, d in zip(df['업비트(KRW)'], df['업_변동'])]
-    display_df['바이낸스 (변동)'] = [format_with_change(v, d, True, "$") for v, d in zip(df['바이낸스($)'], df['바_변동'])]
-    display_df['김프(%)'] = df['김프(%)']
-    display_df['순수익 (변동)'] = [format_with_change(v, d, True, "₩") for v, d in zip(df['순수익(원)'], df['수익_변동'])]
-    display_df['수익률(%)'] = df['수익률(%)'].apply(lambda x: f"{x:.2f}%")
-    
-    return display_df
+        # 현재가는 변동폭 포함
+        display_df['업비트 현재'] = [format_with_change(v, d, True, "₩") for v, d in zip(df['업비트 현재'], df['업_변동'])]
+        display_df['바이낸스 현재'] = [format_with_change(v, d, True, "$") for v, d in zip(df['바이낸스 현재'], df['바_변동'])]
+        
+        display_df['순수익(원)'] = [format_with_change(v, d, True, "₩") for v, d in zip(df['순수익(원)'], df['수익_변동'])]
+        display_df['수익률(%)'] = df['수익률(%)'].apply(lambda x: f"{x:.2f}%")
+        
+        return display_df
+    return df
 
-# [수정된 함수] 요약본 저장 시 모든 필드 포함
+# [NEW] 전체 매매 요약 저장 (컬럼 순서 고정)
 def save_trade_summary(trade_data):
-    # 이제 모든 컬럼을 한글 키로 매핑해서 저장
-    kor_data = {
-        "시간": trade_data.get("Time"),
-        "코인": trade_data.get("Coin"),
-        "수량": trade_data.get("Qty"),
-        "업진입": trade_data.get("U.Entry"),
-        "업청산": trade_data.get("U.Exit"),
-        "바진입": trade_data.get("B.Entry"),
-        "바청산": trade_data.get("B.Exit"),
-        "수수료": trade_data.get("Fees"),
-        "순수익(원)": trade_data.get("Net PNL"),
-        "수익률(%)": trade_data.get("ROI"),
-        "로그파일": trade_data.get("Log File")
-    }
-    df = pd.DataFrame([kor_data])
+    # 컬럼 순서 강제 지정
+    columns = ["시간", "구분", "코인", "수량", "업비트가", "바이낸스가", "순수익(원)", "수익률(%)", "로그파일"]
+    
+    # 입력 데이터를 DataFrame으로 변환
+    df = pd.DataFrame([trade_data], columns=columns)
+    
     if not os.path.exists(HISTORY_FILE):
         df.to_csv(HISTORY_FILE, index=False, encoding='utf-8-sig')
     else:
-        # 기존 파일과 컬럼 개수가 안 맞아도 일단 append (header=False)
-        # 하지만 사용자가 '초기화'를 한번 해주는게 가장 깔끔함
         df.to_csv(HISTORY_FILE, mode='a', header=False, index=False, encoding='utf-8-sig')
 
 def load_trade_summary():
@@ -259,6 +257,19 @@ with tab2:
                     
                     log_filename = f"log_{sym}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
                     
+                    # [NEW] 진입 즉시 '전체 요약'에 기록 (구분: 진입)
+                    save_trade_summary({
+                        "시간": datetime.now().strftime("%m-%d %H:%M"),
+                        "구분": "진입",
+                        "코인": sym,
+                        "수량": f"{btc_qty:.6f}",
+                        "업비트가": int(u_price),
+                        "바이낸스가": f"${b_price:.2f}",
+                        "순수익(원)": 0,
+                        "수익률(%)": "0.00%",
+                        "로그파일": log_filename
+                    })
+
                     st.session_state['position'] = {
                         'symbol': sym,
                         'entry_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -306,30 +317,30 @@ with tab2:
                     
                     st.session_state['balance'] += (pos['invest_krw'] + net_pnl)
                     
-                    # [수정] 모든 필드를 다 넘겨줍니다.
+                    # [NEW] 청산 시 '전체 요약'에 기록 (구분: 청산)
                     save_trade_summary({
-                        "Time": datetime.now().strftime("%m-%d %H:%M"),
-                        "Coin": pos['symbol'],
-                        "Qty": f"{pos['qty']:.6f}",
-                        "U.Entry": int(pos['u_entry']),
-                        "U.Exit": int(curr_u_price),
-                        "B.Entry": f"${pos['b_entry']:.2f}",
-                        "B.Exit": f"${curr_b_price:.2f}",
-                        "Fees": int(total_fee),
-                        "Net PNL": int(net_pnl),
-                        "ROI": f"{roi:.2f}%",
-                        "Log File": pos['log_filename']
+                        "시간": datetime.now().strftime("%m-%d %H:%M"),
+                        "구분": "청산",
+                        "코인": pos['symbol'],
+                        "수량": f"{pos['qty']:.6f}",
+                        "업비트가": int(curr_u_price),
+                        "바이낸스가": f"${curr_b_price:.2f}",
+                        "순수익(원)": int(net_pnl),
+                        "수익률(%)": f"{roi:.2f}%",
+                        "로그파일": pos['log_filename']
                     })
                     
-                    # 종료 로그
+                    # 종료 로그 (개별 파일)
                     save_position_log(pos['log_filename'], {
-                        "시간": datetime.now().strftime("%H:%M:%S"),
-                        "업비트(KRW)": curr_u_price,
-                        "바이낸스($)": curr_b_price,
-                        "김프(%)": data['premium'],
-                        "순수익(원)": int(net_pnl),
-                        "수익률(%)": round(roi, 2),
-                        "상태": "종료"
+                        "Time": datetime.now().strftime("%H:%M:%S"),
+                        "Qty": pos['qty'],
+                        "U_Entry": pos['u_entry'],
+                        "B_Entry": pos['b_entry'],
+                        "U_Curr": curr_u_price,
+                        "B_Curr": curr_b_price,
+                        "Premium": data['premium'],
+                        "Net_PNL": int(net_pnl),
+                        "ROI": round(roi, 2)
                     })
                     
                     st.session_state['position'] = None
@@ -341,7 +352,6 @@ with tab2:
 
     st.markdown("### 📜 전체 매매 요약 (Summary)")
     
-    # [NEW] 기록 초기화 버튼 (꼬인 파일 삭제용)
     if st.button("🗑️ 기록 초기화 (파일 꼬였을 때 누르세요)"):
         if os.path.exists(HISTORY_FILE):
             os.remove(HISTORY_FILE)
@@ -370,28 +380,20 @@ with tab3:
                 df_log = pd.read_csv(selected_file)
                 
                 if not df_log.empty:
-                    # 함수 호출
+                    # 함수 호출로 디스플레이용 데이터 생성
                     df_display = process_log_for_display(df_log)
                     
-                    if '순수익(원)' in df_log.columns or 'Net_PNL' in df_log.columns:
-                        # 호환성 체크
-                        pnl_col = '순수익(원)' if '순수익(원)' in df_log.columns else 'Net_PNL'
-                        
-                        c1, c2 = st.columns([2, 1])
-                        with c1:
-                            st.line_chart(df_log, x='시간' if '시간' in df_log.columns else 'Time', y=pnl_col, height=250)
-                        with c2:
-                            last_row = df_log.iloc[-1]
-                            # 안전하게 값 가져오기
-                            last_pnl = last_row.get('순수익(원)') or last_row.get('Net_PNL')
-                            last_roi = last_row.get('수익률(%)') or last_row.get('ROI(%)')
-                            
-                            st.metric("최종 순수익", f"{int(last_pnl):,} 원")
-                            st.metric("최종 수익률", f"{last_roi}%")
+                    # 수익 그래프
+                    if '순수익(원)' in df_display.columns:
+                        # 숫자만 추출해서 차트 그리기
+                        chart_data = df_log.copy()
+                        # Net_PNL or 순수익(원) 컬럼 찾기
+                        col_name = 'Net_PNL' if 'Net_PNL' in df_log.columns else '순수익(원)'
+                        st.line_chart(chart_data, x=chart_data.columns[0], y=col_name, height=250)
 
                     st.markdown("#### 📋 1분 단위 상세 변동 내역")
                     st.dataframe(
-                        df_display.sort_index(ascending=False).style.map(apply_color, subset=['업비트 (변동)', '바이낸스 (변동)', '순수익 (변동)']),
+                        df_display.sort_index(ascending=False).style.map(apply_color, subset=['업비트 현재', '바이낸스 현재', '순수익(원)']),
                         use_container_width=True,
                         height=500
                     )
@@ -411,7 +413,7 @@ with tab3:
 
 
 # ==========================================
-# [9] 루프
+# [9] 루프 (1분 기록 및 실시간 테이블)
 # ==========================================
 while True:
     d = get_data(sym)
@@ -431,14 +433,17 @@ while True:
                 cur_net_pnl = (gross_u + gross_b) - (pos['entry_fee_u'] + pos['entry_fee_b'] + est_fee)
                 cur_roi = (cur_net_pnl / pos['invest_krw']) * 100
                 
+                # [NEW] 로그 파일에도 진입가/보유수량 포함 저장
                 save_position_log(pos['log_filename'], {
-                    "시간": datetime.now().strftime("%H:%M:%S"),
-                    "업비트(KRW)": d['u_p'],
-                    "바이낸스($)": d['b_p'],
-                    "김프(%)": round(d['premium'], 2),
-                    "순수익(원)": int(cur_net_pnl),
-                    "수익률(%)": round(cur_roi, 2),
-                    "상태": "보유중"
+                    "Time": datetime.now().strftime("%H:%M:%S"),
+                    "Qty": pos['qty'],
+                    "U_Entry": pos['u_entry'],
+                    "B_Entry": pos['b_entry'],
+                    "U_Curr": d['u_p'],
+                    "B_Curr": d['b_p'],
+                    "Premium": round(d['premium'], 2),
+                    "Net_PNL": int(cur_net_pnl),
+                    "ROI": round(cur_roi, 2)
                 })
                 
                 st.session_state['position']['log_count'] += 1
@@ -484,7 +489,7 @@ while True:
         if st.session_state['position']:
             pos = st.session_state['position']
             
-            # [실시간 1분 기록 테이블]
+            # [실시간 1분 기록 테이블] - 진입가 포함!
             with live_log_placeholder.container():
                 if os.path.exists(pos['log_filename']):
                     try:
@@ -493,7 +498,7 @@ while True:
                             df_display = process_log_for_display(df_log)
                             st.caption(f"📡 기록 중: {pos['log_filename']} (총 {len(df_log)}분)")
                             st.dataframe(
-                                df_display.tail(5).sort_index(ascending=False).style.map(apply_color, subset=['업비트 (변동)', '바이낸스 (변동)', '순수익 (변동)']),
+                                df_display.tail(5).sort_index(ascending=False).style.map(apply_color, subset=['업비트 현재', '바이낸스 현재', '순수익(원)']),
                                 use_container_width=True
                             )
                     except: pass
